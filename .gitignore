@@ -1,5 +1,7 @@
-#Ignore everthing inside Input folder
+#Ignore everthing inside Input and Output folder
 Input/*
+Output/*
 
-# Do not ignore the .gitkeep inside the Input folder
+# Do not ignore the .gitkeep inside the Input and Output folder
 !Input/.gitkeep
+!Output/.gitkeep
