@@ -1,78 +1,88 @@
 #!/usr/bin/env Rscript
 
 # --- 1. Dependencies ---
-
-library(xml2)
 library(dplyr)
 library(lubridate)
+library(stringr) 
 
-# --- 2. Locate Files ---
-# Find all export.xml files inside ./Input and its subdirectories
+# --- 2. Configuration & Setup ---
 input_dir <- "./Input"
-if (!dir.exists(input_dir)) {
-  stop(paste("Directory", input_dir, "does not exist. Please create it and add your data."))
+output_dir <- "./Output"
+output_file <- file.path(output_dir, "output.csv")
+
+if (!dir.exists(output_dir)) dir.create(output_dir)
+
+# Find files
+xml_files <- list.files(path = input_dir, pattern = "export\\.xml$", recursive = TRUE, full.names = TRUE)
+
+# Initialize CSV with headers
+headers <- data.frame(type=character(), startDate=character(), endDate=character(), 
+                     value=character(), unit=character(), sourceName=character(),
+                     source_directory=character())
+write.csv(headers, output_file, row.names = FALSE)
+
+# --- 3. Regex Extraction Function ---
+# This helper function extracts the value of an attribute from an XML string
+extract_attr <- function(lines, attr_name) {
+  pattern <- paste0(attr_name, '="([^"]*)"')
+  str_match(lines, pattern)[,2]
 }
 
-xml_files <- list.files(path = input_dir, 
-                        pattern = "export\\.xml$", 
-                        recursive = TRUE, 
-                        full.names = TRUE)
-
-if (length(xml_files) == 0) {
-  stop("No export.xml files found in ./Input/ or its subfolders.")
-}
-
-message(paste("Found", length(xml_files), "file(s). Processing..."))
-
-# --- 3. Process Files & Parse XML ---
-process_health_xml <- function(file_path) {
-  message(paste("Reading:", file_path))
+process_health_regex <- function(file_path) {
+  message(paste("Processing file:", file_path))
+  parent_dir <- basename(dirname(file_path))
   
-  # Load the XML file into memory
-  doc <- read_xml(file_path)
+  # 1. Read lines
+  raw_lines <- readLines(file_path, warn = FALSE)
   
-  # Find all 'Record' nodes (where the data lives)
-  # We use an XPath query to pre-filter only the types we want to save memory
-  # Note: Apple Health uses strict type names
-  xpath_query <- paste0(
-    "//Record[@type='HKQuantityTypeIdentifierHeartRate'] | ",
-    "//Record[@type='HKQuantityTypeIdentifierStepCount']"
+  # 2. Filter for Huawei and specific types using string matching
+  is_huawei <- str_detect(raw_lines, fixed('sourceName="HUAWEI Health: Europe"'))
+  is_target_type <- str_detect(raw_lines, 'HKQuantityTypeIdentifier(HeartRate|StepCount)')
+  
+  relevant_lines <- raw_lines[is_huawei & is_target_type]
+  rm(raw_lines) # Immediate memory cleanup
+  
+  if (length(relevant_lines) == 0) return(0)
+  
+  # 3. Extract data using Regex (No XML parsing = No depth errors)
+  df_clean <- data.frame(
+    type = extract_attr(relevant_lines, "type"),
+    startDate = extract_attr(relevant_lines, "startDate"),
+    endDate = extract_attr(relevant_lines, "endDate"),
+    value = as.numeric(extract_attr(relevant_lines, "value")),
+    unit = extract_attr(relevant_lines, "unit"),
+    sourceName = "HUAWEI Health: Europe",
+    source_directory = parent_dir,
+    stringsAsFactors = FALSE
   )
   
-  records <- xml_find_all(doc, xpath_query)
-  
-  if (length(records) == 0) {
-    warning(paste("No heart rate or step data found in", file_path))
-    return(NULL)
-  }
-  
-  # Extract attributes (value, type, startDate, etc.) into a data frame
-  # xml_attrs returns a list; bind_rows turns it into a tidy tibble
-  df <- bind_rows(lapply(xml_attrs(records), function(x) as.list(x)))
-  
-  # --- 4. Clean and Format Data ---
-  df_clean <- df %>%
-    select(type, startDate, value, unit) %>% # Select only relevant columns
+  # 4. Clean up formatting
+  df_clean <- df_clean %>%
     mutate(
-      value = as.numeric(value),
-      startDate = ymd_hms(startDate), # Parse ISO8601 dates
-      source_file = basename(file_path) # Keep track of which file this came from
-    ) %>%
-    # Simplify type names for readability
-    mutate(type = case_when(
-      type == "HKQuantityTypeIdentifierHeartRate" ~ "HeartRate",
-      type == "HKQuantityTypeIdentifierStepCount" ~ "Steps",
-      TRUE ~ type
-    ))
+      startDate = ymd_hms(startDate),
+      endDate = ymd_hms(endDate),
+      type = case_when(
+        type == "HKQuantityTypeIdentifierHeartRate" ~ "HeartRate",
+        type == "HKQuantityTypeIdentifierStepCount" ~ "Steps",
+        TRUE ~ type
+      )
+    )
   
-  return(df_clean)
+  # 5. Append to CSV
+  write.table(df_clean, output_file, sep = ",", col.names = FALSE, 
+              append = TRUE, row.names = FALSE, qmethod = "double")
+  
+  return(nrow(df_clean))
 }
 
-# Apply the function to all found files and combine results
-final_df <- bind_rows(lapply(xml_files, process_health_xml))
+# --- 4. Main Loop ---
+total_records <- 0
+for (f in xml_files) {
+  count <- process_health_regex(f)
+  total_records <- total_records + count
+  gc() # Garbage collection
+}
 
-# --- 5. Print Result ---
-cat("\n--- Processing Complete ---\n")
-print(head(final_df, 10)) # Print first 10 rows
-cat(paste("\nTotal records loaded:", nrow(final_df), "\n"))
-  
+cat("\n==========================================\n")
+cat(paste("Finished! Total records processed:", total_records, "\n"))
+cat("==========================================\n")
