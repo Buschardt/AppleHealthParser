@@ -1,0 +1,5 @@
+#Ignore everthing inside Input folder
+Input/*
+
+# Do not ignore the .gitkeep inside the Input folder
+!Input/.gitkeep
