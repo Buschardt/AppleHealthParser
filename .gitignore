@@ -5,3 +5,13 @@ Output/*
 # Do not ignore the .gitkeep inside the Input and Output folder
 !Input/.gitkeep
 !Output/.gitkeep
+
+# R specific files
+.Rhistory
+.RData
+.Ruserdata
+
+# renv files
+renv/library/
+renv/staging/
+renv/python/
